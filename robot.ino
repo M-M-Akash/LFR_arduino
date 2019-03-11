@@ -1,162 +1,58 @@
-/*
-  P controll using Weighted Average
-*/
-
 #include <ResponsiveAnalogRead.h>
-#define Kp 100
-#define Kd 50
-#define Ki .1
 
-//PID error segment
-float prevError = 0;
-float error = 0;
-float tError = 0;
-float dError = 0;
+#define Kp 80
+#define Kd 0
+const int pins[8] = {A0, A1, A2, A3, A4, A5, A6, A7};
+int sensors[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+int white[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+int black[8] = {1023, 1023, 1023, 1023, 1023, 1023, 1023, 1023};
+int locations[8];
+int error = 0;
+int lastError = 0;
+#define emitter_pin 2
 
-//Sensor segment
-int sensorData[7] = {0, 0, 0, 0, 0, 0, 0};
-int midSensorValue[7] =  {0, 0, 0, 0, 0, 0, 0};
+#define MOT1 28
+#define MOT2 26
+#define MOT3 30
+#define MOT4 32
 
-int countSensor = 0;
-float sumSensor = 0;
-float avgSensor = 0;
-
-//Logic segment
-bool leftTurn = 0;
-bool rightTurn = 0;
-bool pidControl = 0;
-bool whiteLine = 0;
-bool fullBlack = 0;
-bool fullWhite = 0;
-
-//Motor speed setup
-float dSpeed = 0;
-float leftSpeed = 0;
-float rightSpeed = 0;
-float baseSpeed = 75;
-float maxSpeed = 150;//2X of baseSpeed
-
-//Pin decleration
-#define leftMotorUp 28
-#define leftMotorDown 26
-#define rightMotorUp 30
-#define rightMotorDown 32
-
-#define leftMotorPWM 7
-#define rightMotorPWM 6
-
-int fLineLED = 23;
-int leftLED = 33;
-int rightLED = 35;
-
-const int sensors[7] = {A7, A6, A5, A4, A3, A2, A1};
-
+int baseSpeed = 75;
+int rightMotorSpeed = 0;
+int leftMotorSpeed = 0;
 void setup() {
   Serial.begin(9600);
+  pinMode (MOT1, OUTPUT);
+  pinMode (MOT2, OUTPUT);
+  pinMode (MOT3, OUTPUT);
+  pinMode (MOT4, OUTPUT);
+  
+  sens_location();
+  
+  for (int i = 0; i < 40; i++) {
+    
+    ( i  < 10 || i >= 20 ) ? MotorSpeed(150, -150) : MotorSpeed(-150, 150);
+    
+    calibration();
+    delay(20);
+  }
+  
+   MotorSpeed(0,0);
+  delay(1000);
 
-  pinMode(leftMotorUp, OUTPUT);
-  pinMode(leftMotorDown, OUTPUT);
-  pinMode(rightMotorUp, OUTPUT);
-  pinMode(rightMotorDown, OUTPUT);
-
-  pinMode(leftMotorPWM, OUTPUT);
-  pinMode(rightMotorPWM, OUTPUT);
-
-  pinMode(fLineLED, OUTPUT);
-  pinMode(leftLED, OUTPUT);
-  pinMode(rightLED, OUTPUT);
-
-  digitalWrite(fLineLED, 1);
-  calibrateIR();
-  digitalWrite(fLineLED, 0);
 }
 
-//This function is for calibrating the IR sensors
-//host: 'setup()'
-void calibrateIR() {
-  int white[7] = {0, 0, 0, 0, 0, 0, 0};
-  int black[7] = {1023, 1023, 1023, 1023, 1023, 1023, 1023};
-  leftSpeed = -75;
-  rightSpeed = 75;
-
-  for (int k = 0; k < 4; k++) {
-    leftSpeed = -leftSpeed;
-    rightSpeed = -rightSpeed;
-    driveMotor();
-
-    for (int j = 0; j < 32; j++) {
-      if (k == 0 || k == 3) delay(12);
-      else delay(25);
-
-      for (int i = 0; i < 7; i++) {
-        int a = 0, b = 0;
-        ResponsiveAnalogRead analog(sensors[i], true);
-        analog.update();
-        /*digitalWrite(emitter_pin, HIGH); //glow the emitter for 500 microseconds
-          delayMicroseconds(500);
-          a = analog.getValue();
-
-          digitalWrite(emitter_pin, LOW); //turn off the emitter for 500 microseconds
-          delayMicroseconds(500);
-          b = analog.getValue();
-
-          sensors[i] = a - b;
-        */
-        sensorData[i] = analog.getValue();
-        white[i] = (sensorData[i] > white[i]) ? sensorData[i] : white[i];
-        black[i] = (sensorData[i] < black[i]) ? sensorData[i] : black[i];
-      }
-    }
-  }
-  for (int i = 0; i < 7; i++) {
-    midSensorValue[i] = (white[i] + black[i]) / 2;
-  }
-}
-// Execution fuction
 void loop() {
-
-  readSensor();
-  sensorAnalysis();
-
-  if (fullWhite == 1) {
-    findWay();
-    loop(); //restart
-  }
-
-  else if (pidControl == 1) setPID();
-
-  else if (leftTurn == 1) setLeft();
-
-  else if (rightTurn == 1) setRight();
-
-  //----------------------------- partition
-
-  if (pidControl == 0) resetPID();
-
-  digitalWrite(fLineLED, whiteLine);
-  digitalWrite(leftLED, leftTurn);
-  digitalWrite(rightLED, rightTurn);
-  driveMotor();
-  printData();
+  read_sensors();
+  pid_calc();
+  //MotorSpeed (leftMotorSpeed,rightMotorSpeed);
 }
+void read_sensors() {
+  int numerator = 0;
+  int denominator = 0;
 
-//This function is for sensing the IR, SONAR & WHEEL ENCODER
-//host: 'loop()'
-void readSensor() {
-  readIR();
-  //readSonar();
-}
-//IR Sensing
-//host: 'readSensor()'
-void readIR() {
-  sumSensor = 0;
-  avgSensor = 0;
-
-  countSensor = 0;
-  for (int i = 0; i < 7; i++) {
-    bool sensorActive = 0;
-
-    ResponsiveAnalogRead analog(sensors[i], true);
+  for (int i = 0; i < 8; i++) {
+    int a = 0, b = 0;
+    ResponsiveAnalogRead analog(pins[i], true);
     analog.update();
     /*digitalWrite(emitter_pin, HIGH); //glow the emitter for 500 microseconds
       delayMicroseconds(500);
@@ -165,177 +61,73 @@ void readIR() {
       digitalWrite(emitter_pin, LOW); //turn off the emitter for 500 microseconds
       delayMicroseconds(500);
       b = analog.getValue();
+
+      sensors[i] = a - b;
     */
+    sensors[i] = analog.getValue();
+    sensors[i] = (sensors[i] < black[i]) ? black[i] : sensors[i];
+    sensors[i] = (sensors[i] > white[i]) ? white[i] : sensors[i];
+    sensors[i] = ((sensors[i] - black[i]) / (white[i] - black[i])) * 100;
+    numerator += sensors[i] * locations[i];
+    denominator += sensors[i];
 
-    if ((whiteLine == 0 && analog.getValue() < midSensorValue[i]) || (whiteLine == 1 && analog.getValue() > midSensorValue[i])) {
-      sensorData[i] = i - 3;
-      sensorActive = 1;
-    }
-    else sensorData[i] = 0;
-
-    sumSensor += sensorData[i];
-    if (sensorActive == 1) countSensor++;
   }
-  if (countSensor == 0) avgSensor = 0;
-  else avgSensor = sumSensor / countSensor;
+
+  error = (numerator == 0) ? 0 : numerator / (10 * denominator);
+  //Serial.println(error);
 }
+void calibration() {
+  for (int i = 0; i < 8; i++) {
+    int a = 0, b = 0;
+    ResponsiveAnalogRead analog(pins[i], true);
+    analog.update();
+    /*digitalWrite(emitter_pin, HIGH); //glow the emitter for 500 microseconds
+      delayMicroseconds(500);
+      a = analog.getValue();
 
-//This function analyzes sensor data
-//host: 'loop()'
-void sensorAnalysis() {
-  fullWhite = 0;
+      digitalWrite(emitter_pin, LOW); //turn off the emitter for 500 microseconds
+      delayMicroseconds(500);
+      b = analog.getValue();
 
-  if (countSensor == 0) {//White Surface 
-    fullWhite = 1;
+      sensors[i] = a - b;
+    */
+    sensors[i] = analog.getValue();
+    white[i] = (sensors[i] > white[i]) ? sensors[i] : white[i];
+    black[i] = (sensors[i] < black[i]) ? sensors[i] : black[i];
+     Serial.print(i);
+      Serial.print("\t");
+      Serial.print(white[i]);
+      Serial.print("\t");
+      Serial.println(black[i]);
   }
-  else if (countSensor == 7) {// Black Surface -> Turning Left
-    fullBlack = 1;
-    leftTurn = 1;
-    pidControl = 0;
-    rightTurn = 0;
-  }
-  else {// Line
-    if (sumSensor < 0 && (sensorData[0] == -3 || countSensor > 3)) { //Possible Left Way
-      leftTurn = 1;
-      pidControl = 0;
-      rightTurn = 0;
-    }
+}
+void sens_location() {
+  for (int i = 0; i < 8; i++) {
+    locations[i] = (-40) + (i * 80 / 7); // sensor array is 8cm/80mm there are 7 blank spaces between 8 sensors  the most left sensor location is -40
 
-    else if ((countSensor == 4 || countSensor == 5) && sensorData[0] == -3 && sensorData[6] == 3) {// Line color Changed
-      whiteLine = !whiteLine;
-    }
-    else {// forward line
-      pidControl = 1;
-      fullBlack = 0;
-      leftTurn = 0;
-      rightTurn = 0;
-    }
   }
 }
 
-//This function resets the motor speeds using PID Algorithm
-//host: 'loop()'
-void resetPID() {
-  error = 0;
-  tError = 0;
-}
-//This function sets the motor speeds using PID Algorithm
-//host: 'loop()'
-void setPID() {
-  prevError = error;
-  error = avgSensor;
-  dError = error - prevError;
-  tError += error;
 
-  dSpeed = Kp * error + Kd* dError;// + Ki * tError
-
-  rightSpeed = baseSpeed - dSpeed;
-  leftSpeed = baseSpeed + dSpeed;
-
-  if (rightSpeed > maxSpeed) rightSpeed = maxSpeed;
-  if (leftSpeed > maxSpeed) leftSpeed = maxSpeed;
-  if (rightSpeed < -maxSpeed) rightSpeed = -maxSpeed;
-  if (leftSpeed < - maxSpeed) leftSpeed = -maxSpeed;
+void pid_calc() {
+  int motorSpeed = Kp * error + Kd * (error - lastError);
+  lastError = error;
+  rightMotorSpeed = baseSpeed-motorSpeed;
+  leftMotorSpeed = baseSpeed + motorSpeed;
+  /*Serial.print(error);
+  Serial.print("\t");
+  Serial.print(rightMotorSpeed);
+  Serial.print("\t");
+  Serial.println(leftMotorSpeed);*/
 }
 
-//This 2 functions set the motor speeds to turn
-//host: 'loop()'
-void setLeft() {
-  leftSpeed = -100;
-  rightSpeed = 100;
-}
-void setRight() {
-  leftSpeed = 100;
-  rightSpeed = -100;
-}
-
-//This function searches the way while on white surface
-//host: 'loop()'
-void findWay() {
-  bool BREAK = 0;
-  leftSpeed = -75;
-  rightSpeed = 75;
-
-  for (int k = 0; k < 2; k++) {// Searching way following,,, Left -> right
-    leftSpeed = -leftSpeed;
-    rightSpeed = -rightSpeed;
-    driveMotor();
-
-    for (int j = 0; j < 30; j++) {
-      if (k == 0) delay(20);
-      else delay(30);
-
-      for (int i = 0; i < 7; i++) {
-        readSensor();
-        if (countSensor > 0) {
-          leftSpeed = 0;
-          rightSpeed = 0;
-          driveMotor();
-          BREAK = 1;
-        }
-        if (BREAK == 1) break;
-      }
-      if (BREAK == 1) break;
-    }
-    if (BREAK == 1) break;
-  }
-}
-
-//This function drives the motors
-//host: 'loop()'
-void driveMotor() {
-  if (rightSpeed >= 0) {
-    analogWrite(rightMotorPWM, rightSpeed);
-    digitalWrite(rightMotorDown, LOW);
-    digitalWrite(rightMotorUp, HIGH);
-  }
-  else {
-    analogWrite(rightMotorPWM, -rightSpeed);
-    digitalWrite(rightMotorUp, LOW);
-    digitalWrite(rightMotorDown, HIGH);
-  }
-  if (leftSpeed >= 0) {
-    analogWrite(leftMotorPWM, leftSpeed);
-    digitalWrite(leftMotorDown, LOW);
-    digitalWrite(leftMotorUp, HIGH);
-  }
-  else {
-    analogWrite(leftMotorPWM, -leftSpeed);
-    digitalWrite(leftMotorUp, LOW);
-    digitalWrite(leftMotorDown, HIGH);
-  }
-}
-//This function prints out all the data throughout the whole program
-//host: 'loop()'
-void printData() {
-  /* for(int i=0; i<7; i++){
-     Serial.print(sensorData[i]);
-     Serial.print("\t");Serial.print(i);
-    Serial.print("\t");
-    Serial.print(white[i]);
-    Serial.print("\t");
-    Serial.print(black[i]);
-    } */
-  /*
-    Serial.print(countSensor);
-    Serial.print("\t");
-    Serial.print(sumSensor);
-    Serial.print("\t");
-    Serial.print(avgSensor);
-    Serial.print("\t");
-    Serial.print(whiteLine);
-    Serial.print("\t");
-    Serial.print(error);
-    Serial.print("\t");
-    Serial.print(leftSpeed);
-    Serial.print("\t");
-    Serial.print(rightSpeed);
-    Serial.print("\t");
-    Serial.print(fLine);
-    Serial.print("\t");
-    Serial.print(pidControl);
-    Serial.print("\t");
-  */
-
-  Serial.println("\t");
+void MotorSpeed (int leftmotor, int rightmotor) { 
+  int en1 = abs (leftmotor);
+  int en2 = abs (rightmotor);
+  en1 = (leftmotor > 0) ? 200 - en1 : en1;
+  en2 = (rightmotor >= 0) ? en2 : 200 - en2;
+  analogWrite (MOT2, en1);
+  analogWrite (MOT3, en2);
+  analogWrite (MOT1, (leftmotor > 0) ? 200 : 0);
+  analogWrite (MOT4, (rightmotor >= 0) ? 0 : 200);
 }
